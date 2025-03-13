@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split
 import csv
 import json
 
-# Function to unpickle dataset files
+
 def unpickle(file):
     with open(file, 'rb') as fo:
         dict = pickle.load(fo, encoding='bytes')
@@ -28,7 +28,7 @@ print(label_names)
 
 # Load all training data
 train_images, train_labels = [], []
-for i in range(1, 6):  # Load data_batch_1 to data_batch_5
+for i in range(1, 6): 
     batch_dict = unpickle(os.path.join(cifar_dir, f"data_batch_{i}"))
     train_images.append(batch_dict[b'data'])
     train_labels.extend(batch_dict[b'labels'])
@@ -60,7 +60,7 @@ transform_val = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-# Custom Dataset class
+
 class CIFARDataset(Dataset):
     def __init__(self, images, labels, transform):
         self.images = images
@@ -87,11 +87,9 @@ class SmallResNet(nn.Module):
         super(SmallResNet, self).__init__()
         self.model = models.resnet18(pretrained=False)
 
-        # ✅ Reduce conv1 output to 32 channels
         self.model.conv1 = nn.Conv2d(3, 32, kernel_size=3, stride=1, padding=1, bias=False)
         self.model.bn1 = nn.BatchNorm2d(32)
 
-        # ✅ Modify Layer1 to process 32 channels instead of 64
         self.model.layer1[0].conv1 = nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, bias=False)
         self.model.layer1[0].bn1 = nn.BatchNorm2d(32)
         self.model.layer1[0].conv2 = nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, bias=False)
@@ -102,7 +100,7 @@ class SmallResNet(nn.Module):
         self.model.layer1[1].conv2 = nn.Conv2d(32, 32, kernel_size=3, stride=1, padding=1, bias=False)
         self.model.layer1[1].bn2 = nn.BatchNorm2d(32)
 
-        # ✅ Modify Layer2: Transition 32 → 64
+        # 32 → 64
         self.model.layer2[0].conv1 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1, bias=False)
         self.model.layer2[0].bn1 = nn.BatchNorm2d(64)
         self.model.layer2[0].conv2 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, bias=False)
@@ -117,7 +115,7 @@ class SmallResNet(nn.Module):
         self.model.layer2[1].conv2 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.model.layer2[1].bn2 = nn.BatchNorm2d(64)
 
-        # ✅ Modify Layer3: Transition 64 → 128
+        # 64 → 128
         self.model.layer3[0].conv1 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1, bias=False)
         self.model.layer3[0].bn1 = nn.BatchNorm2d(128)
         self.model.layer3[0].conv2 = nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1, bias=False)
@@ -132,7 +130,7 @@ class SmallResNet(nn.Module):
         self.model.layer3[1].conv2 = nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1, bias=False)
         self.model.layer3[1].bn2 = nn.BatchNorm2d(128)
 
-        # ✅ Modify Layer4: Transition 128 → 256
+        # 128 → 256
         self.model.layer4[0].conv1 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1, bias=False)
         self.model.layer4[0].bn1 = nn.BatchNorm2d(256)
         self.model.layer4[0].conv2 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=False)
@@ -147,7 +145,7 @@ class SmallResNet(nn.Module):
         self.model.layer4[1].conv2 = nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1, bias=False)
         self.model.layer4[1].bn2 = nn.BatchNorm2d(256)
 
-        # ✅ Modify Fully Connected Layer: 256 → 512 → 10
+        # 256 → 512 → 10
         self.model.fc = nn.Sequential(
             nn.Linear(256, 512),  # Expand to 512 neurons
             nn.ReLU(),  # Non-linearity
@@ -168,10 +166,10 @@ summary(resnet, input_size=(3, 32, 32))  # Check parameter count
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(resnet.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4)
 
-# ✅ Use Cosine Annealing Learning Rate Scheduler
+# Use Cosine Annealing Learning Rate Scheduler
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-5)
 
-# Track results
+
 results = {"epochs": [], "train_loss": [], "train_accuracy": [], "val_loss": [], "val_accuracy": []}
 
 # Open a CSV file to log results
@@ -219,16 +217,15 @@ with open("training_log2.csv", "w", newline="") as f:
 
         val_accuracy = 100 * correct_val / total_val
 
-        # ✅ PRINT loss and accuracy
         print(f"Epoch [{epoch+1}/50], Train Loss: {running_loss/len(train_loader):.4f}, "
               f"Train Accuracy: {train_accuracy:.2f}%, Val Loss: {val_loss/len(val_loader):.4f}, "
               f"Val Accuracy: {val_accuracy:.2f}%")
 
         writer.writerow([epoch+1, running_loss/len(train_loader), train_accuracy, val_loss/len(val_loader), val_accuracy])
 
-        # Save best model
+        # Save model
         if val_accuracy > best_acc:
             best_acc = val_accuracy
             torch.save(resnet.state_dict(), "best_resnet2.pth")
 
-print(f"✅ Model successfully trained and saved with parameters <5M 🚀")
+print(f" Model successfully trained and saved")
