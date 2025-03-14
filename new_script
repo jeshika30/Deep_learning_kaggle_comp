@@ -1,0 +1,213 @@
+import numpy as np 
+import pandas as pd
+import os
+import pickle
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, Dataset
+import torchvision.transforms as transforms
+import torchvision.models as models
+from torchsummary import summary
+from sklearn.model_selection import train_test_split
+import csv
+from PIL import Image
+
+# Function to generate submission file
+def generate_submission(model, test_loader, filename_suffix="", device=None):
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model.to(device)
+    model.eval()
+
+    all_ids = []
+    all_preds = []
+
+    with torch.no_grad():
+        for images, indices in test_loader:
+            images = images.to(device)
+            outputs = model(images)
+            preds = outputs.argmax(dim=1)  # Get predicted labels (0-9)
+            all_ids.extend(indices.tolist())
+            all_preds.extend(preds.cpu().tolist())
+
+    submission = pd.DataFrame({"ID": all_ids, "Labels": all_preds})
+    filename = f"submission_{filename_suffix}.csv" if filename_suffix else "submission.csv"
+    submission.to_csv(filename, index=False)
+
+    print(f"Submission file saved as {filename}")
+    return filename
+
+# Function to unpickle dataset files
+def unpickle(file):
+    with open(file, 'rb') as fo:
+        dict = pickle.load(fo, encoding='bytes')
+    return dict
+
+# Load CIFAR-10 dataset
+cifar_dir = "cifar-10-python/cifar-10-batches-py"  
+meta_data = unpickle(os.path.join(cifar_dir, 'batches.meta'))
+label_names = [name.decode("utf-8") for name in meta_data[b'label_names']]
+print(label_names)
+
+# Load all training data
+train_images, train_labels = [], []
+for i in range(1, 6):
+    batch_dict = unpickle(os.path.join(cifar_dir, f"data_batch_{i}"))
+    train_images.append(batch_dict[b'data'])
+    train_labels.extend(batch_dict[b'labels'])
+
+train_images = np.vstack(train_images).reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+train_labels = np.array(train_labels)
+
+# Split into training and validation sets
+train_images, val_images, train_labels, val_labels = train_test_split(
+    train_images, train_labels, test_size=0.1, stratify=train_labels, random_state=42
+)
+
+print("Training dataset shape:", train_images.shape)
+print("Validation dataset shape:", val_images.shape)
+
+# Define transform_val before using it
+transform_val = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+# ✅ Custom dataset class for loading the test data from a .pkl file
+class CIFARTestDataset(Dataset):
+    def __init__(self, pkl_file, transform=None):
+        with open(pkl_file, 'rb') as f:
+            data_dict = pickle.load(f, encoding='bytes')
+
+        self.images = data_dict[b'data'] if b'data' in data_dict else data_dict['data']
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, index):
+        img = self.images[index]
+        
+        # Ensure the image is in the correct format (32,32,3)
+        if img.ndim == 3 and img.shape[2] == 3:
+            pil_img = Image.fromarray(img.astype('uint8'))
+        else:
+            pil_img = Image.fromarray(img.reshape(3, 32, 32).transpose(1, 2, 0).astype('uint8'))
+
+        if self.transform:
+            pil_img = self.transform(pil_img)
+
+        return pil_img, index
+
+# ✅ Define test data transformations
+transform_test = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+# ✅ Load the test dataset from the .pkl file
+test_pkl_path = "/Users/asritabobba/Desktop/Spring25/DEEPLEARNING/project1/cifar_test_nolabel.pkl"  # <-- Change this to your actual test.pkl path
+test_dataset = CIFARTestDataset(test_pkl_path, transform=transform_test)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+
+# Data augmentation and normalization for training
+transform_train = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomCrop(32, padding=4),
+    transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.1),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+])
+
+# Custom Dataset class
+class CIFARDataset(Dataset):
+    def __init__(self, images, labels, transform):
+        self.images = images
+        self.labels = labels
+        self.transform = transform
+    
+    def __len__(self):
+        return len(self.images)
+    
+    def __getitem__(self, idx):
+        image = self.transform(self.images[idx])
+        label = self.labels[idx]
+        return image, label
+
+# Create datasets and dataloaders
+train_dataset = CIFARDataset(train_images, train_labels, transform_train)
+val_dataset = CIFARDataset(val_images, val_labels, transform_val)
+
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False)
+
+class SmallResNet(nn.Module):
+    def __init__(self, num_classes=10):
+        super(SmallResNet, self).__init__()
+        self.model = models.resnet18(pretrained=False)
+        self.model.fc = nn.Linear(self.model.fc.in_features, num_classes)
+
+    def forward(self, x):
+        return self.model(x)
+
+# Initialize model, optimizer, and loss function
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+resnet = SmallResNet().to(device)
+
+summary(resnet, input_size=(3, 32, 32))  # Check parameter count
+
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(resnet.parameters(), lr=0.1, momentum=0.9, weight_decay=1e-4)
+
+# ✅ Use Cosine Annealing Learning Rate Scheduler
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=1e-5)
+
+# Track results
+best_acc = 0
+
+for epoch in range(50):
+    resnet.train()
+    correct_train, total_train = 0, 0
+
+    for inputs, labels in train_loader:
+        inputs, labels = inputs.to(device), labels.to(device)
+        optimizer.zero_grad()
+        outputs = resnet(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        _, predicted = torch.max(outputs, 1)
+        total_train += labels.size(0)
+        correct_train += (predicted == labels).sum().item()
+
+    train_accuracy = 100 * correct_train / total_train
+    scheduler.step()
+
+    # Validation
+    resnet.eval()
+    correct_val, total_val = 0, 0
+    with torch.no_grad():
+        for inputs, labels in val_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = resnet(inputs)
+            _, predicted = torch.max(outputs, 1)
+            total_val += labels.size(0)
+            correct_val += (predicted == labels).sum().item()
+
+    val_accuracy = 100 * correct_val / total_val
+    print(f"Epoch [{epoch+1}/50], Train Accuracy: {train_accuracy:.2f}%, Val Accuracy: {val_accuracy:.2f}%")
+
+    if val_accuracy > best_acc:
+        best_acc = val_accuracy
+        torch.save(resnet.state_dict(), "best_resnet2.pth")
+
+# Load best model for inference
+resnet.load_state_dict(torch.load("best_resnet2.pth", map_location=device))
+
+# Generate submission file
+generate_submission(resnet, test_loader, filename_suffix="resnet_test")
